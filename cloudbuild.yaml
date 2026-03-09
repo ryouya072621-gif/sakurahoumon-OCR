@@ -38,6 +38,8 @@ steps:
       - '--max-instances'
       - '1'
       - '--session-affinity'
+      - '--execution-environment'
+      - 'gen2'
       - '--allow-unauthenticated'
 
 substitutions:
