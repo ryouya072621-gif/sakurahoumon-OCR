@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}OCR結果 - YomiToku Web{% endblock %}
+{% block head %}
+<style>
+    .split-panel { display: flex; height: calc(100vh - 140px); }
+    .left-panel { width: 50%; overflow: auto; border-right: 1px solid #e5e7eb; position: relative; }
+    .right-panel { width: 50%; overflow: auto; }
+    .page-img-container { position: relative; display: inline-block; }
+    .page-img-container img { max-width: 100%; }
+    .text-block { cursor: pointer; transition: background-color 0.15s; }
+    .text-block:hover { background-color: #eef2ff; }
+    .text-block.editing { background-color: #fef3c7; }
+    .text-block.modified { border-left: 3px solid #f59e0b; }
+    .confidence-high { }
+    .confidence-mid { background-color: #fef9c3; }
+    .confidence-low { background-color: #fee2e2; }
+    .table-cell { border: 1px solid #d1d5db; padding: 4px 8px; font-size: 0.875rem; }
+    .table-cell:hover { background-color: #eef2ff; cursor: pointer; }
+    .table-cell.modified { background-color: #fef3c7; }
+    .ai-corrected { border-left: 3px solid #8b5cf6; background-color: #f5f3ff; }
+    .ai-diff-old { background-color: #fee2e2; text-decoration: line-through; color: #991b1b; }
+    .ai-diff-new { background-color: #dcfce7; color: #166534; font-weight: 500; }
+    .loading-btn { pointer-events: none; opacity: 0.7; }
+
+    /* View mode tabs */
+    .view-tab { padding: 6px 16px; font-size: 0.875rem; border-bottom: 2px solid transparent; cursor: pointer; }
+    .view-tab.active { border-bottom-color: #6366f1; color: #4338ca; font-weight: 600; }
+    .view-tab:hover:not(.active) { color: #6366f1; }
+
+    /* Structured view */
+    .struct-section { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+    .struct-section-header { background: #f8fafc; padding: 8px 12px; font-weight: 600; font-size: 0.875rem; border-bottom: 1px solid #e5e7eb; }
+    .struct-field { padding: 6px 12px; border-bottom: 1px solid #f1f5f9; display: flex; gap: 8px; font-size: 0.875rem; }
+    .struct-field:last-child { border-bottom: none; }
+    .struct-label { color: #64748b; min-width: 120px; flex-shrink: 0; }
+    .struct-value { color: #1e293b; }
+    .struct-selected { color: #059669; font-weight: 600; }
+    .struct-unselected { color: #cbd5e1; }
+    .struct-check { display: inline-block; width: 18px; text-align: center; }
+    .schedule-grid { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .schedule-grid th, .schedule-grid td { border: 1px solid #e2e8f0; padding: 4px 8px; text-align: center; }
+    .schedule-grid th { background: #f1f5f9; font-weight: 600; }
+    .schedule-mark-ok { color: #059669; font-weight: bold; font-size: 1rem; }
+    .schedule-mark-ng { color: #ef4444; }
+    .schedule-mark-maybe { color: #f59e0b; }
+
+    /* Structured view editable fields */
+    .struct-editable { cursor: pointer; border-radius: 4px; transition: background-color 0.15s; }
+    .struct-editable:hover { background-color: #eef2ff; }
+    .struct-editable.editing { background-color: #fef3c7; }
+    .struct-editable.modified { border-left: 3px solid #f59e0b; padding-left: 4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+    <div class="flex items-center gap-4">
+        <h1 class="text-xl font-bold text-gray-800">OCR結果</h1>
+        <div class="flex items-center gap-2">
+            <button id="prev-page" class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50" disabled>&larr;</button>
+            <span id="page-indicator" class="text-sm text-gray-600"></span>
+            <button id="next-page" class="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50">&rarr;</button>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <button id="ai-analyze-btn"
+                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium">
+            AI解析
+        </button>
+        <div class="relative">
+            <button id="export-btn"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
+                エクスポート &#9662;
+            </button>
+            <div id="export-menu" class="hidden absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                <a href="#" data-format="structured" class="export-link block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 font-medium">構造化JSON</a>
+                <a href="#" data-format="json" class="export-link block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">OCR生データ (JSON)</a>
+                <a href="#" data-format="md" class="export-link block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Markdown</a>
+                <a href="#" data-format="csv" class="export-link block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">CSV (テーブルのみ)</a>
+                <a href="#" data-format="xlsx" class="export-link block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Excel (.xlsx)</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="split-panel bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <div class="left-panel p-4" id="image-panel">
+        <div class="page-img-container" id="img-container">
+            <img id="page-image" src="" alt="Page Image">
+        </div>
+    </div>
+    <div class="right-panel" id="text-panel">
+        <div class="flex border-b border-gray-200 px-4 pt-2">
+            <div class="view-tab active" data-view="structured">構造化ビュー</div>
+            <div class="view-tab" data-view="ocr">OCRテキスト</div>
+        </div>
+        <div class="p-4 overflow-y-auto" style="height: calc(100% - 42px);">
+            <div id="structured-content">
+                <p class="text-gray-400 text-sm">「AI解析」ボタンを押して構造化ビューを生成してください</p>
+            </div>
+            <div id="ocr-content" class="hidden"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const JOB_ID = "{{ job_id }}";
+    const PAGE_COUNT = {{ page_count }};
+    const OCR_DATA = {{ ocr_data | tojson }};
+</script>
+<script src="/static/js/viewer.js"></script>
+<script src="/static/js/editor.js"></script>
+{% endblock %}

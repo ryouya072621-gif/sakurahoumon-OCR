@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}YomiToku Web{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <nav class="bg-indigo-700 text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <a href="/" class="text-xl font-bold tracking-wide">YomiToku Web</a>
+            <span class="text-indigo-200 text-sm">Japanese Document OCR</span>
+        </div>
+    </nav>
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </main>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
