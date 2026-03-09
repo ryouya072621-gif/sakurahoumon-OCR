@@ -1,3 +1,6 @@
 flask
 yomitoku
 openpyxl
+anthropic
+gunicorn
+Pillow
