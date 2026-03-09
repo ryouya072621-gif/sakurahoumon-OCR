@@ -290,3 +290,207 @@ def analyze_page(page_data, page_image_base64=None):
     structured = extract_structured(page_data, page_image_base64)
 
     return corrections, structured
+
+
+# ============ 相談シート専用構造化抽出 ============
+
+SYSTEM_PROMPT_CONSULTATION = """\
+あなたは訪問歯科診療の「相談シート」を構造化するエキスパートです。
+
+## 相談シートの構造（「医療法人さくら会 訪問歯科診療相談室」フォーマット）
+
+このフォームは訪問歯科診療を依頼する際に記入される定型シートで、以下のセクションがあります。
+
+### 抽出対象フィールド一覧
+
+**本人情報**
+- 記入日（令和○年○月○日）
+- ふりがな（ひらがな）
+- 氏名（漢字）
+- 性別（男/女 — 丸囲みで選択）
+- 生年月日（明・大・昭・平・令 から元号を丸で選択 + ○年○月○日）
+- 年齢
+- 住所（〒郵便番号含む）
+- 施設名（住所内に含まれる場合あり）
+- 部屋番号
+- 駐車場（あり・路駐・なし — 丸囲みで選択）+ 補足
+
+**連絡先**
+- 自宅電話番号
+- 携帯電話番号
+
+**保険情報**
+- 医療負担割合（1割・2割・3割 — 丸囲みで選択）
+- 公費（有無）
+- 要介護度（支1・支2・介1〜介5・申請中 — 丸囲みで選択）
+
+**既往歴**（3列×6行 = 最大18疾患 + その他）
+印刷済み病名リストから○が打たれたもの:
+列1: 認知症 / 脳梗塞後遺症 / 骨粗鬆症 / パーキンソン病 / 高齢による筋力低下 / 足腰が不自由
+列2: 高血圧 / 虚血性心疾患 / 不整脈 / 心不全 / 脳血管疾患 / 糖尿病
+列3: 喘息 / 慢性気管支炎 / 甲状腺機能障害 / 甲状腺機能亢進 / てんかん / 慢性腎臓病
++ その他（手書き記入）
+
+**感染症**
+- なし or あり → HBs / HCV / 梅毒 / MRSA / その他
+
+**内科主治医**
+- 病院名
+- 医師名
+
+**意思疎通**
+- レベル（1.困難 / 2.やや困難 / 3.ゆっくりなら可 / 4.問題なし）
+
+**食事形態**
+- 経口摂取（常食/嚥下調整食）/ 経腸栄養 / 静脈栄養
+- 誤嚥性肺炎の発症・罹患（あり/なし）
+
+**訪問可能曜日**
+- AM / PM × 日〜土 の○×マトリクス
+
+**依頼者情報**
+- 依頼者区分（本人/家族/ケアマネ/施設職員 — 丸囲みで選択）
+
+**キーパーソン**
+- 氏名、ふりがな、続柄、電話番号、住所
+
+**ケアマネージャー**
+- 氏名、ふりがな、事業所名、電話番号、FAX番号
+
+**来院理由**（複数選択可）
+- 歯が痛い / グラグラする / 歯ぐきが腫れた / 詰め物が取れた
+- 口の中にできもの / 入れ歯の調子が悪い / 入れ歯を作りたい / 歯が抜けた
+- 口腔ケアをして欲しい / その他
+
+**知ったきっかけ**（複数選択可）
+- HP / 院内パンフレット / ポスターを見て
+- 口コミ / スタッフから / 他患者もさくら会に依頼しているため / その他
+
+## 丸囲み判定ルール
+★画像を必ず確認し、実際にどの項目に○が打たれているか目視で判定してください。
+- ○、◎、手書きの丸 → 選択されている
+- 選択肢の文字に丸が重なっている → その項目が選択
+- 既往歴は○が打たれた病名のみ出力（○がない病名は出力しない）
+
+## 出力JSON形式
+以下の形式で**JSONのみ**返してください（```なし）:
+{
+  "patient": {
+    "furigana_sei": "姓ふりがな",
+    "furigana_mei": "名ふりがな",
+    "sei": "姓",
+    "mei": "名",
+    "gender": "男 or 女",
+    "dob_era": "昭和",
+    "dob_year": 27,
+    "dob_month": 9,
+    "dob_day": 21,
+    "dob_western": "1952/09/21",
+    "age": 72,
+    "postal_code": "488-0007",
+    "address": "尾張旭市柏井町公園通512番地",
+    "facility": "大和ホーム",
+    "room": "203",
+    "parking": "あり",
+    "parking_note": "建物の横"
+  },
+  "contact": {
+    "home_phone": "",
+    "mobile_phone": "0561-53-2989"
+  },
+  "insurance": {
+    "burden_ratio": 2,
+    "public_expense": "",
+    "care_level": "要介護3"
+  },
+  "medical_history": {
+    "conditions": ["認知症", "骨粗鬆症"],
+    "other": "MCIと言われている"
+  },
+  "infection": {
+    "status": "なし",
+    "details": []
+  },
+  "physician": {
+    "hospital": "陶生病院",
+    "doctor": "副島和晃"
+  },
+  "communication": "4.問題なし",
+  "diet": {
+    "type": "経口摂取（常食）",
+    "aspiration_pneumonia": "なし"
+  },
+  "schedule": {
+    "am": {"日":"×","月":"○","火":"○","水":"×","木":"○","金":"○","土":"×"},
+    "pm": {"日":"×","月":"○","火":"○","水":"×","木":"○","金":"○","土":"×"}
+  },
+  "requester": {
+    "type": "施設職員",
+    "name": "",
+    "phone": ""
+  },
+  "key_person": {
+    "name": "",
+    "furigana": "",
+    "relationship": "",
+    "phone": "",
+    "address": ""
+  },
+  "care_manager": {
+    "name": "",
+    "furigana": "",
+    "facility": "",
+    "phone": "",
+    "fax": ""
+  },
+  "visit_reason": ["口腔ケアをして欲しい"],
+  "referral_source": ["スタッフから"],
+  "notes": ""
+}
+
+★空欄のフィールドは空文字列("")を入れてください。不明な場合も空文字列。
+★dob_western は西暦の "YYYY/MM/DD" 形式。元号から計算してください。
+"""
+
+
+def extract_consultation_structured(page_data, page_image_base64=None):
+    """相談シート専用の構造化抽出（Vision API使用）"""
+    client = get_client()
+    ocr_text = _build_ocr_text(page_data)
+
+    user_text = (
+        "以下は「訪問歯科診療相談シート」のOCRテキストです。\n"
+        "画像も添付しています。OCRテキストと画像の両方を使って、全フィールドを正確に抽出してください。\n"
+        "特に丸囲み（○）の選択項目、既往歴のチェック、訪問可能曜日の○×は画像から判断してください。\n\n"
+        "JSONのみ返してください（```なし）。\n\n"
+        f"--- OCRテキスト ---\n{ocr_text}\n---"
+    )
+
+    content = []
+    if page_image_base64:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": page_image_base64,
+            },
+        })
+    content.append({"type": "text", "text": user_text})
+
+    message = client.messages.create(
+        model=MODEL_STRUCTURE,
+        max_tokens=4096,
+        system=SYSTEM_PROMPT_CONSULTATION,
+        messages=[{"role": "user", "content": content}],
+    )
+
+    response_text = message.content[0].text.strip()
+    if response_text.startswith("```"):
+        lines = response_text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        response_text = "\n".join(lines)
+
+    return json.loads(response_text)

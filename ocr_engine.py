@@ -9,6 +9,10 @@ from pathlib import Path
 jobs = {}
 jobs_lock = threading.Lock()
 
+# Batch storage
+batches = {}
+batches_lock = threading.Lock()
+
 # Analyzer singleton
 _analyzer = None
 _analyzer_lock = threading.Lock()
@@ -109,6 +113,49 @@ def _run_ocr(job_id):
         with jobs_lock:
             jobs[job_id]["status"] = "error"
             jobs[job_id]["error"] = str(e)
+
+
+def create_batch(file_entries):
+    """Create a batch of OCR jobs for consultation sheets.
+    file_entries: list of {"name": filename, "path": filepath}
+    """
+    batch_id = str(uuid.uuid4())[:8]
+    job_ids = []
+    for entry in file_entries:
+        jid = create_job(entry["path"])
+        with jobs_lock:
+            jobs[jid]["source_name"] = entry["name"]
+        job_ids.append(jid)
+
+    with batches_lock:
+        batches[batch_id] = {
+            "job_ids": job_ids,
+            "status": "processing",
+            "structured": {},  # job_id -> structured data
+        }
+
+    # Start OCR for all files sequentially in background
+    thread = threading.Thread(target=_run_batch_ocr, args=(batch_id,), daemon=True)
+    thread.start()
+
+    return batch_id
+
+
+def get_batch(batch_id):
+    with batches_lock:
+        return batches.get(batch_id)
+
+
+def _run_batch_ocr(batch_id):
+    batch = get_batch(batch_id)
+    if not batch:
+        return
+
+    for job_id in batch["job_ids"]:
+        _run_ocr(job_id)
+
+    with batches_lock:
+        batches[batch_id]["status"] = "done"
 
 
 def get_page_image_jpeg(job_id, page_idx):

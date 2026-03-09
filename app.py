@@ -4,6 +4,7 @@ import csv
 import io
 import time
 import shutil
+import zipfile
 from pathlib import Path
 
 from flask import (
@@ -401,6 +402,191 @@ def generate_xlsx(results):
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+# ============ 相談シートモード ============
+
+@app.route("/upload-consultation", methods=["POST"])
+def upload_consultation():
+    files = request.files.getlist("files")
+    if not files:
+        return redirect(url_for("index"))
+
+    file_entries = []
+    batch_dir = os.path.join(app.config["UPLOAD_FOLDER"], f"batch_{int(time.time())}")
+    os.makedirs(batch_dir, exist_ok=True)
+
+    for f in files:
+        if not f.filename:
+            continue
+        ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+
+        if ext == "zip":
+            # Extract ZIP and find PDFs inside
+            zip_path = os.path.join(batch_dir, f"temp_{int(time.time())}.zip")
+            f.save(zip_path)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith(".pdf") and not name.startswith("__MACOSX"):
+                        basename = Path(name).name
+                        extract_path = os.path.join(batch_dir, basename)
+                        with zf.open(name) as src, open(extract_path, "wb") as dst:
+                            dst.write(src.read())
+                        file_entries.append({"name": basename, "path": extract_path})
+            os.remove(zip_path)
+
+        elif ext == "pdf":
+            safe_name = f"upload_{int(time.time())}_{len(file_entries)}.pdf"
+            file_path = os.path.join(batch_dir, safe_name)
+            f.save(file_path)
+            file_entries.append({"name": f.filename, "path": file_path})
+
+    if not file_entries:
+        return redirect(url_for("index"))
+
+    batch_id = ocr_engine.create_batch(file_entries)
+    return redirect(url_for("consultation_processing", batch_id=batch_id))
+
+
+@app.route("/consultation/processing/<batch_id>")
+def consultation_processing(batch_id):
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        abort(404)
+    # Check if all done
+    all_done = all(
+        (ocr_engine.get_job(jid) or {}).get("status") == "done"
+        for jid in batch["job_ids"]
+    )
+    if all_done:
+        return redirect(url_for("consultation_results", batch_id=batch_id))
+    return render_template("consultation_processing.html", batch_id=batch_id)
+
+
+@app.route("/consultation/status/<batch_id>")
+def consultation_status(batch_id):
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        return jsonify({"error": "Batch not found"}), 404
+
+    items = []
+    for jid in batch["job_ids"]:
+        job = ocr_engine.get_job(jid) or {}
+        items.append({
+            "job_id": jid,
+            "name": job.get("source_name", ""),
+            "status": job.get("status", "pending"),
+            "current_page": job.get("current_page", 0),
+            "page_count": job.get("page_count", 0),
+            "error": job.get("error"),
+        })
+
+    all_done = all(it["status"] in ("done", "error") for it in items)
+    return jsonify({"items": items, "all_done": all_done})
+
+
+@app.route("/consultation/results/<batch_id>")
+def consultation_results(batch_id):
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        abort(404)
+
+    # Collect job data
+    jobs_data = []
+    for jid in batch["job_ids"]:
+        job = ocr_engine.get_job(jid)
+        if not job or job["status"] != "done":
+            continue
+        jobs_data.append({
+            "job_id": jid,
+            "name": job.get("source_name", jid),
+            "page_count": len(job["results"]),
+            "ocr_data": job["results"],
+        })
+
+    return render_template(
+        "consultation_results.html",
+        batch_id=batch_id,
+        jobs_data=jobs_data,
+    )
+
+
+@app.route("/consultation/<batch_id>/ai-analyze-job", methods=["POST"])
+def consultation_ai_analyze(batch_id):
+    """相談シート専用 AI解析（1ジョブ分）"""
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        abort(404)
+
+    data = request.get_json()
+    job_id = data.get("job_id")
+    if job_id not in batch["job_ids"]:
+        abort(400)
+
+    job = ocr_engine.get_job(job_id)
+    if not job or job["status"] != "done":
+        abort(400)
+
+    try:
+        import base64
+        # Use first page (consultation sheets are typically 1-2 pages)
+        page_idx = 0
+        page_image_base64 = None
+        if page_idx < len(job.get("images", [])):
+            buf = ocr_engine.get_page_image_jpeg(job_id, page_idx)
+            if buf:
+                page_image_base64 = base64.b64encode(buf.read()).decode("ascii")
+
+        structured = ai_corrector.extract_consultation_structured(
+            job["results"][page_idx], page_image_base64
+        )
+
+        # Save structured data to batch
+        with ocr_engine.batches_lock:
+            ocr_engine.batches[batch_id]["structured"][job_id] = structured
+
+        return jsonify({"ok": True, "structured": structured})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/consultation/<batch_id>/save-structured", methods=["PUT"])
+def consultation_save_structured(batch_id):
+    """構造化ビューの編集内容を保存"""
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        abort(404)
+
+    data = request.get_json()
+    job_id = data.get("job_id")
+    structured = data.get("structured")
+
+    with ocr_engine.batches_lock:
+        ocr_engine.batches[batch_id]["structured"][job_id] = structured
+
+    return jsonify({"ok": True})
+
+
+@app.route("/consultation/<batch_id>/export-csv")
+def consultation_export_csv(batch_id):
+    """DentNet CSV一括エクスポート"""
+    batch = ocr_engine.get_batch(batch_id)
+    if not batch:
+        abort(404)
+
+    import consultation_csv
+    rows = []
+    for jid in batch["job_ids"]:
+        struct = batch["structured"].get(jid)
+        if struct:
+            rows.append(consultation_csv.structured_to_dentnet_row(struct))
+
+    csv_bytes = consultation_csv.rows_to_csv_bytes(rows)
+    buf = io.BytesIO(csv_bytes)
+    buf.seek(0)
+    return send_file(buf, mimetype="text/csv",
+                     as_attachment=True,
+                     download_name="dentnet_patient_data.csv")
 
 
 if __name__ == "__main__":

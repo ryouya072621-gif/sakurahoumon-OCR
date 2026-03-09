@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}相談シート処理中 - YomiToku Web{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto mt-12">
+    <div class="text-center mb-8">
+        <div id="spinner" class="inline-block w-16 h-16 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
+        <h1 class="text-2xl font-bold text-gray-800 mt-4 mb-2">相談シート一括OCR処理中...</h1>
+        <p class="text-gray-500">CPU推論のため、1ファイルあたり約1〜3分かかります</p>
+    </div>
+
+    <div id="batch-list" class="space-y-3"></div>
+
+    <div id="error-box" class="hidden mt-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+        <p class="font-medium">エラーが発生しました</p>
+        <a href="/" class="inline-block mt-3 text-sm text-indigo-600 hover:underline">トップに戻る</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const BATCH_ID = "{{ batch_id }}";
+
+function poll() {
+    fetch(`/consultation/status/${BATCH_ID}`)
+        .then(r => r.json())
+        .then(data => {
+            const list = document.getElementById('batch-list');
+            list.innerHTML = '';
+
+            data.items.forEach(item => {
+                let statusText, statusColor, barWidth;
+                if (item.status === 'done') {
+                    statusText = '完了';
+                    statusColor = 'text-emerald-600';
+                    barWidth = '100%';
+                } else if (item.status === 'error') {
+                    statusText = 'エラー: ' + (item.error || '');
+                    statusColor = 'text-red-600';
+                    barWidth = '100%';
+                } else if (item.status === 'processing') {
+                    const pct = item.page_count > 0 ? Math.round((item.current_page / item.page_count) * 100) : 0;
+                    statusText = `処理中 ${item.current_page}/${item.page_count}`;
+                    statusColor = 'text-blue-600';
+                    barWidth = Math.max(pct, 10) + '%';
+                } else if (item.status === 'loading_model') {
+                    statusText = 'モデル読込中...';
+                    statusColor = 'text-yellow-600';
+                    barWidth = '5%';
+                } else {
+                    statusText = '待機中';
+                    statusColor = 'text-gray-400';
+                    barWidth = '0%';
+                }
+
+                const barColor = item.status === 'done' ? 'bg-emerald-500' :
+                                 item.status === 'error' ? 'bg-red-500' : 'bg-blue-500';
+
+                list.innerHTML += `
+                    <div class="p-4 bg-white rounded-lg shadow-sm border border-gray-200">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-sm font-medium text-gray-700">${item.name}</span>
+                            <span class="text-xs font-medium ${statusColor}">${statusText}</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div class="${barColor} h-2 rounded-full transition-all duration-500" style="width: ${barWidth}"></div>
+                        </div>
+                    </div>`;
+            });
+
+            if (data.all_done) {
+                document.getElementById('spinner').classList.add('hidden');
+                setTimeout(() => {
+                    window.location.href = `/consultation/results/${BATCH_ID}`;
+                }, 1000);
+            } else {
+                setTimeout(poll, 2000);
+            }
+        })
+        .catch(() => setTimeout(poll, 3000));
+}
+
+document.addEventListener('DOMContentLoaded', poll);
+</script>
+{% endblock %}
