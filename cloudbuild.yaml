@@ -36,7 +36,8 @@ steps:
       - '--min-instances'
       - '1'
       - '--max-instances'
-      - '3'
+      - '1'
+      - '--session-affinity'
       - '--allow-unauthenticated'
 
 substitutions:
