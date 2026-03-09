@@ -22,6 +22,12 @@ COPY . .
 # Create uploads directory
 RUN mkdir -p uploads
 
+# PyTorch thread control (prevent SIGABRT on Cloud Run)
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=2
+ENV TORCH_NUM_THREADS=2
+ENV PYTHONUNBUFFERED=1
+
 # Cloud Run sets PORT env var (default 8080)
 ENV PORT=8080
 
