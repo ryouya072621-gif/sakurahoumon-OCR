@@ -32,7 +32,19 @@ def get_analyzer():
             return _analyzer
         _analyzer_loading = True
         from yomitoku import DocumentAnalyzer
-        _analyzer = DocumentAnalyzer(device="cpu")
+        _analyzer = DocumentAnalyzer(
+            device="cpu",
+            configs={
+                "ocr": {
+                    "text_detector": {"infer_onnx": True},
+                    "text_recognizer": {"infer_onnx": True},
+                },
+                "layout_analyzer": {
+                    "layout_parser": {"infer_onnx": True},
+                    "table_structure_recognizer": {"infer_onnx": True},
+                },
+            },
+        )
         _analyzer_loading = False
         return _analyzer
 
